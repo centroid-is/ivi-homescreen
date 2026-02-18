@@ -24,7 +24,7 @@
 #include <cstring>
 #include <utility>
 
-#include "text-input-unstable-v3-client-protocol.h"
+#include "text-input-unstable-v1-client-protocol.h"
 
 #include "config/common.h"
 
@@ -131,9 +131,9 @@ Display::~Display() {
 #endif
 
   if (m_text_input)
-    zwp_text_input_v3_destroy(m_text_input);
+    zwp_text_input_v1_destroy(m_text_input);
   if (m_text_input_manager)
-    zwp_text_input_manager_v3_destroy(m_text_input_manager);
+    zwp_text_input_manager_v1_destroy(m_text_input_manager);
 
   wl_registry_destroy(m_registry);
   wl_display_flush(m_display);
@@ -243,12 +243,12 @@ void Display::registry_handle_global(void* data,
     d->m_repeat_timer =
         std::make_shared<EventTimer>(CLOCK_MONOTONIC, keyboard_repeat_func, d);
     d->m_repeat_timer->set_timerspec(40, 400);
-  } else if (strcmp(interface, zwp_text_input_manager_v3_interface.name) == 0) {
+  } else if (strcmp(interface, zwp_text_input_manager_v1_interface.name) == 0) {
     d->m_text_input_manager =
-        static_cast<struct zwp_text_input_manager_v3*>(wl_registry_bind(
-            registry, name, &zwp_text_input_manager_v3_interface,
+        static_cast<struct zwp_text_input_manager_v1*>(wl_registry_bind(
+            registry, name, &zwp_text_input_manager_v1_interface,
             std::min(static_cast<uint32_t>(1), version)));
-    spdlog::info("Wayland: zwp_text_input_manager_v3 bound (version {})",
+    spdlog::info("Wayland: zwp_text_input_manager_v1 bound (version {})",
                  version);
   }
 #if ENABLE_AGL_SHELL_CLIENT
@@ -292,42 +292,65 @@ const wl_registry_listener Display::registry_listener = {
 };
 
 // =============================================================================
-// zwp_text_input_v3 - Virtual keyboard support
+// zwp_text_input_v1 - Virtual keyboard support
 // =============================================================================
 
 void Display::text_input_enter(void* data,
-                                struct zwp_text_input_v3* /* text_input */,
+                                struct zwp_text_input_v1* /* text_input */,
                                 struct wl_surface* /* surface */) {
   auto* d = static_cast<Display*>(data);
-  spdlog::debug("text_input_v3: enter");
+  spdlog::debug("text_input_v1: enter");
   if (d->m_virtual_keyboard_requested) {
     d->ShowVirtualKeyboard();
   }
 }
 
 void Display::text_input_leave(void* /* data */,
-                                struct zwp_text_input_v3* /* text_input */,
-                                struct wl_surface* /* surface */) {
-  spdlog::debug("text_input_v3: leave");
+                                struct zwp_text_input_v1* /* text_input */) {
+  spdlog::debug("text_input_v1: leave");
+}
+
+void Display::text_input_modifiers_map(void* /* data */,
+                                        struct zwp_text_input_v1* /* text_input */,
+                                        struct wl_array* /* map */) {
+}
+
+void Display::text_input_input_panel_state(void* /* data */,
+                                            struct zwp_text_input_v1* /* text_input */,
+                                            uint32_t state) {
+  spdlog::debug("text_input_v1: input_panel_state: {}", state);
 }
 
 void Display::text_input_preedit_string(void* /* data */,
-                                         struct zwp_text_input_v3* /* text_input */,
+                                         struct zwp_text_input_v1* /* text_input */,
+                                         uint32_t /* serial */,
                                          const char* text,
-                                         int32_t cursor_begin,
-                                         int32_t cursor_end) {
-  spdlog::debug("text_input_v3: preedit_string: {} ({}-{})",
-                text ? text : "(null)", cursor_begin, cursor_end);
+                                         const char* commit) {
+  spdlog::debug("text_input_v1: preedit_string: {} (commit: {})",
+                text ? text : "(null)", commit ? commit : "(null)");
+}
+
+void Display::text_input_preedit_styling(void* /* data */,
+                                          struct zwp_text_input_v1* /* text_input */,
+                                          uint32_t /* index */,
+                                          uint32_t /* length */,
+                                          uint32_t /* style */) {
+}
+
+void Display::text_input_preedit_cursor(void* /* data */,
+                                         struct zwp_text_input_v1* /* text_input */,
+                                         int32_t /* index */) {
 }
 
 void Display::text_input_commit_string(void* data,
-                                        struct zwp_text_input_v3* /* text_input */,
+                                        struct zwp_text_input_v1* /* text_input */,
+                                        uint32_t /* serial */,
                                         const char* text) {
   auto* d = static_cast<Display*>(data);
   if (!text || strlen(text) == 0 || !d->m_view_controller_state) {
     return;
   }
-  spdlog::debug("text_input_v3: commit_string: {}", text);
+  spdlog::debug("text_input_v1: commit_string: {}", text);
 
   // Decode UTF-8 to code points and feed each through CharCallback
   const auto* p = reinterpret_cast<const uint8_t*>(text);
@@ -362,45 +385,83 @@ void Display::text_input_commit_string(void* data,
   }
 }
 
+void Display::text_input_cursor_position(void* /* data */,
+                                          struct zwp_text_input_v1* /* text_input */,
+                                          int32_t /* index */,
+                                          int32_t /* anchor */) {
+}
+
 void Display::text_input_delete_surrounding(void* /* data */,
-                                             struct zwp_text_input_v3* /* text_input */,
-                                             uint32_t before_length,
-                                             uint32_t after_length) {
-  spdlog::debug("text_input_v3: delete_surrounding: before={}, after={}",
-                before_length, after_length);
+                                             struct zwp_text_input_v1* /* text_input */,
+                                             int32_t index,
+                                             uint32_t length) {
+  spdlog::debug("text_input_v1: delete_surrounding: index={}, length={}",
+                index, length);
 }
 
-void Display::text_input_done(void* /* data */,
-                               struct zwp_text_input_v3* /* text_input */,
-                               uint32_t serial) {
-  spdlog::debug("text_input_v3: done (serial {})", serial);
+void Display::text_input_keysym(void* data,
+                                 struct zwp_text_input_v1* /* text_input */,
+                                 uint32_t /* serial */,
+                                 uint32_t /* time */,
+                                 uint32_t sym,
+                                 uint32_t state,
+                                 uint32_t modifiers) {
+  auto* d = static_cast<Display*>(data);
+  spdlog::debug("text_input_v1: keysym: sym={}, state={}, modifiers={}",
+                sym, state, modifiers);
+  if (d->m_view_controller_state) {
+    bool released = (state == 0);
+    KeyCallback(d->m_view_controller_state, released,
+                static_cast<xkb_keysym_t>(sym), 0, modifiers);
+  }
 }
 
-const struct zwp_text_input_v3_listener Display::text_input_listener = {
+void Display::text_input_language(void* /* data */,
+                                   struct zwp_text_input_v1* /* text_input */,
+                                   uint32_t /* serial */,
+                                   const char* language) {
+  spdlog::debug("text_input_v1: language: {}", language ? language : "(null)");
+}
+
+void Display::text_input_text_direction(void* /* data */,
+                                         struct zwp_text_input_v1* /* text_input */,
+                                         uint32_t /* serial */,
+                                         uint32_t direction) {
+  spdlog::debug("text_input_v1: text_direction: {}", direction);
+}
+
+const struct zwp_text_input_v1_listener Display::text_input_listener = {
     .enter = text_input_enter,
     .leave = text_input_leave,
+    .modifiers_map = text_input_modifiers_map,
+    .input_panel_state = text_input_input_panel_state,
     .preedit_string = text_input_preedit_string,
+    .preedit_styling = text_input_preedit_styling,
+    .preedit_cursor = text_input_preedit_cursor,
     .commit_string = text_input_commit_string,
+    .cursor_position = text_input_cursor_position,
     .delete_surrounding_text = text_input_delete_surrounding,
-    .done = text_input_done,
+    .keysym = text_input_keysym,
+    .language = text_input_language,
+    .text_direction = text_input_text_direction,
 };
 
 static uint32_t content_purpose_from_input_type(const std::string& input_type) {
   if (input_type == "TextInputType.number" ||
       input_type == "TextInputType.numberWithOptions") {
-    return ZWP_TEXT_INPUT_V3_CONTENT_PURPOSE_NUMBER;
+    return ZWP_TEXT_INPUT_V1_CONTENT_PURPOSE_NUMBER;
   } else if (input_type == "TextInputType.phone") {
-    return ZWP_TEXT_INPUT_V3_CONTENT_PURPOSE_PHONE;
+    return ZWP_TEXT_INPUT_V1_CONTENT_PURPOSE_PHONE;
   } else if (input_type == "TextInputType.emailAddress") {
-    return ZWP_TEXT_INPUT_V3_CONTENT_PURPOSE_EMAIL;
+    return ZWP_TEXT_INPUT_V1_CONTENT_PURPOSE_EMAIL;
   } else if (input_type == "TextInputType.url") {
-    return ZWP_TEXT_INPUT_V3_CONTENT_PURPOSE_URL;
+    return ZWP_TEXT_INPUT_V1_CONTENT_PURPOSE_URL;
   } else if (input_type == "TextInputType.visiblePassword") {
-    return ZWP_TEXT_INPUT_V3_CONTENT_PURPOSE_PASSWORD;
+    return ZWP_TEXT_INPUT_V1_CONTENT_PURPOSE_PASSWORD;
   } else if (input_type == "TextInputType.name") {
-    return ZWP_TEXT_INPUT_V3_CONTENT_PURPOSE_NAME;
+    return ZWP_TEXT_INPUT_V1_CONTENT_PURPOSE_NAME;
   }
-  return ZWP_TEXT_INPUT_V3_CONTENT_PURPOSE_NORMAL;
+  return ZWP_TEXT_INPUT_V1_CONTENT_PURPOSE_NORMAL;
 }
 
 void Display::SetVirtualKeyboardVisible(bool show,
@@ -417,19 +478,19 @@ void Display::SetVirtualKeyboardVisible(bool show,
 void Display::ShowVirtualKeyboard() {
   if (!m_text_input) {
     spdlog::warn(
-        "Cannot show virtual keyboard: zwp_text_input_v3 not available");
+        "Cannot show virtual keyboard: zwp_text_input_v1 not available");
     return;
   }
-  // Enable + commit called twice per Sony's reference implementation;
-  // some compositors require this sequence.
-  zwp_text_input_v3_enable(m_text_input);
-  zwp_text_input_v3_commit(m_text_input);
-
-  zwp_text_input_v3_enable(m_text_input);
-  zwp_text_input_v3_set_content_type(
-      m_text_input, ZWP_TEXT_INPUT_V3_CONTENT_HINT_NONE,
+  if (!m_seat || !m_active_surface) {
+    spdlog::warn(
+        "Cannot show virtual keyboard: seat or surface not available");
+    return;
+  }
+  zwp_text_input_v1_activate(m_text_input, m_seat, m_active_surface);
+  zwp_text_input_v1_set_content_type(
+      m_text_input, ZWP_TEXT_INPUT_V1_CONTENT_HINT_NONE,
       content_purpose_from_input_type(m_current_input_type));
-  zwp_text_input_v3_commit(m_text_input);
+  zwp_text_input_v1_show_input_panel(m_text_input);
 
   spdlog::info("Virtual keyboard: show (input_type={})", m_current_input_type);
 }
@@ -438,8 +499,10 @@ void Display::DismissVirtualKeyboard() {
   if (!m_text_input) {
     return;
   }
-  zwp_text_input_v3_disable(m_text_input);
-  zwp_text_input_v3_commit(m_text_input);
+  zwp_text_input_v1_hide_input_panel(m_text_input);
+  if (m_seat) {
+    zwp_text_input_v1_deactivate(m_text_input, m_seat);
+  }
   spdlog::info("Virtual keyboard: dismiss");
 }
 
@@ -566,13 +629,13 @@ void Display::seat_handle_capabilities(void* data,
     }
   }
 
-  // Create text input instance when seat and manager are both available
+  // Create text input instance when manager is available
   if (d->m_text_input_manager && !d->m_text_input) {
-    d->m_text_input = zwp_text_input_manager_v3_get_text_input(
-        d->m_text_input_manager, seat);
+    d->m_text_input = zwp_text_input_manager_v1_create_text_input(
+        d->m_text_input_manager);
     if (d->m_text_input) {
-      zwp_text_input_v3_add_listener(d->m_text_input, &text_input_listener, d);
-      spdlog::info("zwp_text_input_v3 created");
+      zwp_text_input_v1_add_listener(d->m_text_input, &text_input_listener, d);
+      spdlog::info("zwp_text_input_v1 created");
     }
   }
 }
