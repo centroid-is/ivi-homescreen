@@ -594,9 +594,14 @@ void Display::seat_handle_capabilities(void* data,
                                        uint32_t caps) {
   auto* d = static_cast<Display*>(data);
 
+  spdlog::info("Seat capabilities: pointer={}, keyboard={}, touch={}",
+               (caps & WL_SEAT_CAPABILITY_POINTER) ? "yes" : "no",
+               (caps & WL_SEAT_CAPABILITY_KEYBOARD) ? "yes" : "no",
+               (caps & WL_SEAT_CAPABILITY_TOUCH) ? "yes" : "no");
+
   if (!d->m_wayland_event_mask.pointer) {
     if ((caps & WL_SEAT_CAPABILITY_POINTER) && !d->m_pointer.wl_pointer) {
-      spdlog::debug("Pointer Present");
+      spdlog::info("Binding wl_pointer");
       d->m_pointer.wl_pointer = wl_seat_get_pointer(seat);
       wl_pointer_add_listener(d->m_pointer.wl_pointer, &pointer_listener, d);
     } else if (!(caps & WL_SEAT_CAPABILITY_POINTER) &&
@@ -608,7 +613,7 @@ void Display::seat_handle_capabilities(void* data,
 
   if (!d->m_wayland_event_mask.keyboard) {
     if ((caps & WL_SEAT_CAPABILITY_KEYBOARD) && !d->m_keyboard) {
-      spdlog::debug("Keyboard Present");
+      spdlog::info("Binding wl_keyboard");
       d->m_keyboard = wl_seat_get_keyboard(seat);
       wl_keyboard_add_listener(d->m_keyboard, &keyboard_listener, d);
     } else if (!(caps & WL_SEAT_CAPABILITY_KEYBOARD) && d->m_keyboard) {
@@ -619,7 +624,7 @@ void Display::seat_handle_capabilities(void* data,
 
   if (!d->m_wayland_event_mask.touch) {
     if ((caps & WL_SEAT_CAPABILITY_TOUCH) && !d->m_touch.touch) {
-      spdlog::debug("Touch Present");
+      spdlog::info("Binding wl_touch");
       d->m_touch.touch = wl_seat_get_touch(seat);
       wl_touch_set_user_data(d->m_touch.touch, d);
       wl_touch_add_listener(d->m_touch.touch, &touch_listener, d);
@@ -627,6 +632,8 @@ void Display::seat_handle_capabilities(void* data,
       wl_touch_release(d->m_touch.touch);
       d->m_touch.touch = nullptr;
     }
+  } else {
+    spdlog::warn("Touch events are masked by wayland_event_mask config");
   }
 
   // Create text input instance when manager is available
@@ -957,9 +964,14 @@ void Display::touch_handle_down(void* data,
   d->m_active_surface = surface;
   d->m_touch_engine = d->m_surface_engine_map[surface];
   if (d->m_touch_engine) {
+    spdlog::debug("touch_down: id={}, x={:.1f}, y={:.1f}", id,
+                  wl_fixed_to_double(x_w), wl_fixed_to_double(y_w));
     d->m_touch_engine->CoalesceTouchEvent(FlutterPointerPhase::kDown,
                                           wl_fixed_to_double(x_w),
                                           wl_fixed_to_double(y_w), id);
+  } else {
+    spdlog::warn("touch_down: no engine for surface {:p} (map size={})",
+                 static_cast<void*>(surface), d->m_surface_engine_map.size());
   }
 }
 
