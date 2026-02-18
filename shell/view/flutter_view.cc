@@ -110,8 +110,17 @@ FlutterView::FlutterView(Configuration::Config config,
       m_state->engine_state->internal_plugin_registrar->messenger();
   m_state->keyboard_hook_handlers.push_back(
       std::make_unique<flutter::KeyEventHandler>(internal_plugin_messenger));
-  m_state->keyboard_hook_handlers.push_back(
-      std::make_unique<flutter::TextInputPlugin>(internal_plugin_messenger));
+
+  auto text_input =
+      std::make_unique<flutter::TextInputPlugin>(internal_plugin_messenger);
+  // Wire virtual keyboard: TextInputPlugin -> Display -> zwp_text_input_v3
+  auto display_ptr = m_wayland_display;
+  text_input->SetVirtualKeyboardCallback(
+      [display_ptr](bool show, const std::string& input_type) {
+        display_ptr->SetVirtualKeyboardVisible(show, input_type);
+      });
+  m_state->keyboard_hook_handlers.push_back(std::move(text_input));
+
   m_wayland_display->SetViewControllerState(
       m_state->engine_state->view_controller);
 

@@ -5,7 +5,9 @@
 #ifndef FLUTTER_SHELL_PLATFORM_HOMESCREEN_TEXT_INPUT_PLUGIN_H
 #define FLUTTER_SHELL_PLATFORM_HOMESCREEN_TEXT_INPUT_PLUGIN_H
 
+#include <functional>
 #include <memory>
+#include <string>
 
 #include "flutter/shell/platform/common/client_wrapper/include/flutter/binary_messenger.h"
 #include "flutter/shell/platform/common/client_wrapper/include/flutter/method_channel.h"
@@ -36,6 +38,14 @@ class TextInputPlugin final : public KeyboardHookHandler {
   // |KeyboardHookHandler|
   void CharHook(unsigned int code_point) override;
 
+  // Set a callback for controlling the virtual keyboard.
+  // The callback receives (show, input_type) so the Wayland layer can set
+  // the appropriate content purpose for the on-screen keyboard.
+  void SetVirtualKeyboardCallback(
+      std::function<void(bool, const std::string&)> callback) {
+    virtual_keyboard_callback_ = std::move(callback);
+  }
+
  private:
   // Sends the current state of the given model to the Flutter engine.
   void SendStateUpdate(const TextInputModel& model) const;
@@ -65,6 +75,9 @@ class TextInputPlugin final : public KeyboardHookHandler {
   // An action requested by the user on the input client. See available options:
   // https://api.flutter.dev/flutter/services/TextInputAction-class.html
   std::string input_action_;
+
+  // Callback to show/dismiss the virtual keyboard via Wayland text-input protocol.
+  std::function<void(bool, const std::string&)> virtual_keyboard_callback_;
 };
 
 }  // namespace flutter

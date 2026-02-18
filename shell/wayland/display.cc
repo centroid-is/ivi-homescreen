@@ -24,6 +24,8 @@
 #include <cstring>
 #include <utility>
 
+#include "text-input-unstable-v3-client-protocol.h"
+
 #include "config/common.h"
 
 #include "engine.h"
@@ -34,6 +36,9 @@ extern void KeyCallback(FlutterDesktopViewControllerState* view_state,
                         xkb_keysym_t keysym,
                         uint32_t xkb_scancode,
                         uint32_t modifiers);
+
+extern void CharCallback(FlutterDesktopViewControllerState* view_state,
+                          unsigned int code_point);
 
 Display::Display(const bool enable_cursor,
                  const std::string& ignore_wayland_event,
@@ -124,6 +129,11 @@ Display::~Display() {
   if (m_xdg_wm_base)
     xdg_wm_base_destroy(m_xdg_wm_base);
 #endif
+
+  if (m_text_input)
+    zwp_text_input_v3_destroy(m_text_input);
+  if (m_text_input_manager)
+    zwp_text_input_manager_v3_destroy(m_text_input_manager);
 
   wl_registry_destroy(m_registry);
   wl_display_flush(m_display);
@@ -233,6 +243,13 @@ void Display::registry_handle_global(void* data,
     d->m_repeat_timer =
         std::make_shared<EventTimer>(CLOCK_MONOTONIC, keyboard_repeat_func, d);
     d->m_repeat_timer->set_timerspec(40, 400);
+  } else if (strcmp(interface, zwp_text_input_manager_v3_interface.name) == 0) {
+    d->m_text_input_manager =
+        static_cast<struct zwp_text_input_manager_v3*>(wl_registry_bind(
+            registry, name, &zwp_text_input_manager_v3_interface,
+            std::min(static_cast<uint32_t>(1), version)));
+    spdlog::info("Wayland: zwp_text_input_manager_v3 bound (version {})",
+                 version);
   }
 #if ENABLE_AGL_SHELL_CLIENT
   else if (strcmp(interface, agl_shell_interface.name) == 0 &&
@@ -273,6 +290,158 @@ const wl_registry_listener Display::registry_listener = {
     registry_handle_global,
     registry_handle_global_remove,
 };
+
+// =============================================================================
+// zwp_text_input_v3 - Virtual keyboard support
+// =============================================================================
+
+void Display::text_input_enter(void* data,
+                                struct zwp_text_input_v3* /* text_input */,
+                                struct wl_surface* /* surface */) {
+  auto* d = static_cast<Display*>(data);
+  spdlog::debug("text_input_v3: enter");
+  if (d->m_virtual_keyboard_requested) {
+    d->ShowVirtualKeyboard();
+  }
+}
+
+void Display::text_input_leave(void* /* data */,
+                                struct zwp_text_input_v3* /* text_input */,
+                                struct wl_surface* /* surface */) {
+  spdlog::debug("text_input_v3: leave");
+}
+
+void Display::text_input_preedit_string(void* /* data */,
+                                         struct zwp_text_input_v3* /* text_input */,
+                                         const char* text,
+                                         int32_t cursor_begin,
+                                         int32_t cursor_end) {
+  spdlog::debug("text_input_v3: preedit_string: {} ({}-{})",
+                text ? text : "(null)", cursor_begin, cursor_end);
+}
+
+void Display::text_input_commit_string(void* data,
+                                        struct zwp_text_input_v3* /* text_input */,
+                                        const char* text) {
+  auto* d = static_cast<Display*>(data);
+  if (!text || strlen(text) == 0 || !d->m_view_controller_state) {
+    return;
+  }
+  spdlog::debug("text_input_v3: commit_string: {}", text);
+
+  // Decode UTF-8 to code points and feed each through CharCallback
+  const auto* p = reinterpret_cast<const uint8_t*>(text);
+  const auto* end = p + strlen(text);
+  while (p < end) {
+    uint32_t cp = 0;
+    if ((*p & 0x80u) == 0) {
+      cp = *p++;
+    } else if ((*p & 0xE0u) == 0xC0u) {
+      cp = static_cast<uint32_t>(*p++ & 0x1Fu) << 6u;
+      if (p < end)
+        cp |= static_cast<uint32_t>(*p++ & 0x3Fu);
+    } else if ((*p & 0xF0u) == 0xE0u) {
+      cp = static_cast<uint32_t>(*p++ & 0x0Fu) << 12u;
+      if (p < end)
+        cp |= static_cast<uint32_t>(*p++ & 0x3Fu) << 6u;
+      if (p < end)
+        cp |= static_cast<uint32_t>(*p++ & 0x3Fu);
+    } else if ((*p & 0xF8u) == 0xF0u) {
+      cp = static_cast<uint32_t>(*p++ & 0x07u) << 18u;
+      if (p < end)
+        cp |= static_cast<uint32_t>(*p++ & 0x3Fu) << 12u;
+      if (p < end)
+        cp |= static_cast<uint32_t>(*p++ & 0x3Fu) << 6u;
+      if (p < end)
+        cp |= static_cast<uint32_t>(*p++ & 0x3Fu);
+    } else {
+      p++;  // skip invalid byte
+      continue;
+    }
+    CharCallback(d->m_view_controller_state, cp);
+  }
+}
+
+void Display::text_input_delete_surrounding(void* /* data */,
+                                             struct zwp_text_input_v3* /* text_input */,
+                                             uint32_t before_length,
+                                             uint32_t after_length) {
+  spdlog::debug("text_input_v3: delete_surrounding: before={}, after={}",
+                before_length, after_length);
+}
+
+void Display::text_input_done(void* /* data */,
+                               struct zwp_text_input_v3* /* text_input */,
+                               uint32_t serial) {
+  spdlog::debug("text_input_v3: done (serial {})", serial);
+}
+
+const struct zwp_text_input_v3_listener Display::text_input_listener = {
+    .enter = text_input_enter,
+    .leave = text_input_leave,
+    .preedit_string = text_input_preedit_string,
+    .commit_string = text_input_commit_string,
+    .delete_surrounding_text = text_input_delete_surrounding,
+    .done = text_input_done,
+};
+
+static uint32_t content_purpose_from_input_type(const std::string& input_type) {
+  if (input_type == "TextInputType.number" ||
+      input_type == "TextInputType.numberWithOptions") {
+    return ZWP_TEXT_INPUT_V3_CONTENT_PURPOSE_NUMBER;
+  } else if (input_type == "TextInputType.phone") {
+    return ZWP_TEXT_INPUT_V3_CONTENT_PURPOSE_PHONE;
+  } else if (input_type == "TextInputType.emailAddress") {
+    return ZWP_TEXT_INPUT_V3_CONTENT_PURPOSE_EMAIL;
+  } else if (input_type == "TextInputType.url") {
+    return ZWP_TEXT_INPUT_V3_CONTENT_PURPOSE_URL;
+  } else if (input_type == "TextInputType.visiblePassword") {
+    return ZWP_TEXT_INPUT_V3_CONTENT_PURPOSE_PASSWORD;
+  } else if (input_type == "TextInputType.name") {
+    return ZWP_TEXT_INPUT_V3_CONTENT_PURPOSE_NAME;
+  }
+  return ZWP_TEXT_INPUT_V3_CONTENT_PURPOSE_NORMAL;
+}
+
+void Display::SetVirtualKeyboardVisible(bool show,
+                                         const std::string& input_type) {
+  m_virtual_keyboard_requested = show;
+  m_current_input_type = input_type;
+  if (show) {
+    ShowVirtualKeyboard();
+  } else {
+    DismissVirtualKeyboard();
+  }
+}
+
+void Display::ShowVirtualKeyboard() {
+  if (!m_text_input) {
+    spdlog::warn(
+        "Cannot show virtual keyboard: zwp_text_input_v3 not available");
+    return;
+  }
+  // Enable + commit called twice per Sony's reference implementation;
+  // some compositors require this sequence.
+  zwp_text_input_v3_enable(m_text_input);
+  zwp_text_input_v3_commit(m_text_input);
+
+  zwp_text_input_v3_enable(m_text_input);
+  zwp_text_input_v3_set_content_type(
+      m_text_input, ZWP_TEXT_INPUT_V3_CONTENT_HINT_NONE,
+      content_purpose_from_input_type(m_current_input_type));
+  zwp_text_input_v3_commit(m_text_input);
+
+  spdlog::info("Virtual keyboard: show (input_type={})", m_current_input_type);
+}
+
+void Display::DismissVirtualKeyboard() {
+  if (!m_text_input) {
+    return;
+  }
+  zwp_text_input_v3_disable(m_text_input);
+  zwp_text_input_v3_commit(m_text_input);
+  spdlog::info("Virtual keyboard: dismiss");
+}
 
 void Display::display_handle_geometry(void* data,
                                       struct wl_output* /* wl_output */,
@@ -394,6 +563,16 @@ void Display::seat_handle_capabilities(void* data,
     } else if (!(caps & WL_SEAT_CAPABILITY_TOUCH) && d->m_touch.touch) {
       wl_touch_release(d->m_touch.touch);
       d->m_touch.touch = nullptr;
+    }
+  }
+
+  // Create text input instance when seat and manager are both available
+  if (d->m_text_input_manager && !d->m_text_input) {
+    d->m_text_input = zwp_text_input_manager_v3_get_text_input(
+        d->m_text_input_manager, seat);
+    if (d->m_text_input) {
+      zwp_text_input_v3_add_listener(d->m_text_input, &text_input_listener, d);
+      spdlog::info("zwp_text_input_v3 created");
     }
   }
 }

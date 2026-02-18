@@ -182,8 +182,14 @@ void TextInputPlugin::HandleMethodCall(
     const std::unique_ptr<flutter::MethodResult<rapidjson::Document>>& result) {
   const std::string& method = method_call.method_name();
 
-  if (method == kShowMethod || method == kHideMethod) {
-    // These methods are no-ops.
+  if (method == kShowMethod) {
+    if (virtual_keyboard_callback_) {
+      virtual_keyboard_callback_(true, input_type_);
+    }
+  } else if (method == kHideMethod) {
+    if (virtual_keyboard_callback_) {
+      virtual_keyboard_callback_(false, "");
+    }
   } else if (method == kClearClientMethod) {
     active_model_ = nullptr;
   } else if (method == kSetClientMethod) {
