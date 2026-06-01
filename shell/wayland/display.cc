@@ -689,6 +689,10 @@ void Display::pointer_handle_enter(void* data,
   d->m_pointer.event.surface_y = wl_fixed_to_double(sy);
   d->m_pointer.serial = serial;
 
+  spdlog::info("pointer_handle_enter: surface={}, engine={}, x={:.1f}, y={:.1f}",
+               fmt::ptr(surface), fmt::ptr(d->m_active_engine),
+               d->m_pointer.event.surface_x, d->m_pointer.event.surface_y);
+
   if (d->m_active_engine) {
     d->m_active_engine->CoalesceMouseEvent(
         kFlutterPointerSignalKindNone, kAdd, d->m_pointer.event.surface_x,
@@ -703,6 +707,8 @@ void Display::pointer_handle_leave(void* data,
   auto* d = static_cast<Display*>(data);
 
   d->m_pointer.serial = serial;
+
+  spdlog::info("pointer_handle_leave: engine={}", fmt::ptr(d->m_active_engine));
 
   if (d->m_active_engine) {
     d->m_active_engine->CoalesceMouseEvent(kFlutterPointerSignalKindNone,
@@ -757,6 +763,12 @@ void Display::pointer_handle_button(void* data,
     } else if (state == WL_POINTER_BUTTON_STATE_RELEASED) {
       phase = kUp;
     }
+
+    spdlog::info("pointer_handle_button: button=0x{:x}, state={}, engine={}, "
+                 "x={:.1f}, y={:.1f}",
+                 button, state == WL_POINTER_BUTTON_STATE_PRESSED ? "down" : "up",
+                 fmt::ptr(d->m_active_engine),
+                 d->m_pointer.event.surface_x, d->m_pointer.event.surface_y);
 
     if (d->m_active_engine) {
       d->m_active_engine->CoalesceMouseEvent(
