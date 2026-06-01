@@ -240,6 +240,13 @@ class Display {
   }
 
   /**
+   * @brief Show or dismiss the virtual keyboard via zwp_text_input_v1
+   * @param[in] show true to show, false to dismiss
+   * @param[in] input_type Flutter input type (e.g. "TextInputType.number")
+   */
+  void SetVirtualKeyboardVisible(bool show, const std::string& input_type);
+
+  /**
    * @brief Activate system cursor
    * @param[in] device No use
    * @param[in] kind Cursor kind
@@ -368,6 +375,7 @@ class Display {
 
   struct wl_seat* m_seat{};
   struct wl_keyboard* m_keyboard{};
+  struct wl_seat* m_keyboard_seat{};
 
   struct xdg_wm_base* m_xdg_wm_base{};
 
@@ -387,6 +395,69 @@ class Display {
     struct ivi_application* application = nullptr;
     struct ivi_wm* ivi_wm = nullptr;
   } m_ivi_shell;
+
+  // Text input protocol for virtual keyboard support (zwp_text_input_v1)
+  struct zwp_text_input_manager_v1* m_text_input_manager{};
+  struct zwp_text_input_v1* m_text_input{};
+  bool m_virtual_keyboard_requested{};
+  std::string m_current_input_type;
+
+  void ShowVirtualKeyboard();
+  void DismissVirtualKeyboard();
+
+  static void text_input_enter(void* data,
+                                struct zwp_text_input_v1* text_input,
+                                struct wl_surface* surface);
+  static void text_input_leave(void* data,
+                                struct zwp_text_input_v1* text_input);
+  static void text_input_modifiers_map(void* data,
+                                        struct zwp_text_input_v1* text_input,
+                                        struct wl_array* map);
+  static void text_input_input_panel_state(void* data,
+                                            struct zwp_text_input_v1* text_input,
+                                            uint32_t state);
+  static void text_input_preedit_string(void* data,
+                                         struct zwp_text_input_v1* text_input,
+                                         uint32_t serial,
+                                         const char* text,
+                                         const char* commit);
+  static void text_input_preedit_styling(void* data,
+                                          struct zwp_text_input_v1* text_input,
+                                          uint32_t index,
+                                          uint32_t length,
+                                          uint32_t style);
+  static void text_input_preedit_cursor(void* data,
+                                         struct zwp_text_input_v1* text_input,
+                                         int32_t index);
+  static void text_input_commit_string(void* data,
+                                        struct zwp_text_input_v1* text_input,
+                                        uint32_t serial,
+                                        const char* text);
+  static void text_input_cursor_position(void* data,
+                                          struct zwp_text_input_v1* text_input,
+                                          int32_t index,
+                                          int32_t anchor);
+  static void text_input_delete_surrounding(void* data,
+                                             struct zwp_text_input_v1* text_input,
+                                             int32_t index,
+                                             uint32_t length);
+  static void text_input_keysym(void* data,
+                                 struct zwp_text_input_v1* text_input,
+                                 uint32_t serial,
+                                 uint32_t time,
+                                 uint32_t sym,
+                                 uint32_t state,
+                                 uint32_t modifiers);
+  static void text_input_language(void* data,
+                                   struct zwp_text_input_v1* text_input,
+                                   uint32_t serial,
+                                   const char* language);
+  static void text_input_text_direction(void* data,
+                                         struct zwp_text_input_v1* text_input,
+                                         uint32_t serial,
+                                         uint32_t direction);
+
+  static const struct zwp_text_input_v1_listener text_input_listener;
 
   bool m_enable_cursor;
   struct wl_surface* m_cursor_surface{};
@@ -433,6 +504,7 @@ class Display {
 
   struct pointer {
     struct wl_pointer* wl_pointer;
+    struct wl_seat* seat;
     struct pointer_event event;
     uint32_t serial;
 
@@ -458,6 +530,7 @@ class Display {
 
   struct touch_ {
     struct wl_touch* touch;
+    struct wl_seat* seat;
     struct touch_event event;
     wl_fixed_t surface_x[kMaxTouchFinger];
     wl_fixed_t surface_y[kMaxTouchFinger];

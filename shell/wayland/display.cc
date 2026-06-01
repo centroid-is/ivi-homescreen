@@ -24,6 +24,8 @@
 #include <cstring>
 #include <utility>
 
+#include "text-input-unstable-v1-client-protocol.h"
+
 #include "config/common.h"
 
 #include "engine.h"
@@ -34,6 +36,9 @@ extern void KeyCallback(FlutterDesktopViewControllerState* view_state,
                         xkb_keysym_t keysym,
                         uint32_t xkb_scancode,
                         uint32_t modifiers);
+
+extern void CharCallback(FlutterDesktopViewControllerState* view_state,
+                          unsigned int code_point);
 
 Display::Display(const bool enable_cursor,
                  const std::string& ignore_wayland_event,
@@ -124,6 +129,11 @@ Display::~Display() {
   if (m_xdg_wm_base)
     xdg_wm_base_destroy(m_xdg_wm_base);
 #endif
+
+  if (m_text_input)
+    zwp_text_input_v1_destroy(m_text_input);
+  if (m_text_input_manager)
+    zwp_text_input_manager_v1_destroy(m_text_input_manager);
 
   wl_registry_destroy(m_registry);
   wl_display_flush(m_display);
@@ -233,6 +243,13 @@ void Display::registry_handle_global(void* data,
     d->m_repeat_timer =
         std::make_shared<EventTimer>(CLOCK_MONOTONIC, keyboard_repeat_func, d);
     d->m_repeat_timer->set_timerspec(40, 400);
+  } else if (strcmp(interface, zwp_text_input_manager_v1_interface.name) == 0) {
+    d->m_text_input_manager =
+        static_cast<struct zwp_text_input_manager_v1*>(wl_registry_bind(
+            registry, name, &zwp_text_input_manager_v1_interface,
+            std::min(static_cast<uint32_t>(1), version)));
+    spdlog::info("Wayland: zwp_text_input_manager_v1 bound (version {})",
+                 version);
   }
 #if ENABLE_AGL_SHELL_CLIENT
   else if (strcmp(interface, agl_shell_interface.name) == 0 &&
@@ -273,6 +290,221 @@ const wl_registry_listener Display::registry_listener = {
     registry_handle_global,
     registry_handle_global_remove,
 };
+
+// =============================================================================
+// zwp_text_input_v1 - Virtual keyboard support
+// =============================================================================
+
+void Display::text_input_enter(void* data,
+                                struct zwp_text_input_v1* /* text_input */,
+                                struct wl_surface* /* surface */) {
+  auto* d = static_cast<Display*>(data);
+  spdlog::debug("text_input_v1: enter");
+  if (d->m_virtual_keyboard_requested) {
+    d->ShowVirtualKeyboard();
+  }
+}
+
+void Display::text_input_leave(void* /* data */,
+                                struct zwp_text_input_v1* /* text_input */) {
+  spdlog::debug("text_input_v1: leave");
+}
+
+void Display::text_input_modifiers_map(void* /* data */,
+                                        struct zwp_text_input_v1* /* text_input */,
+                                        struct wl_array* /* map */) {
+}
+
+void Display::text_input_input_panel_state(void* /* data */,
+                                            struct zwp_text_input_v1* /* text_input */,
+                                            uint32_t state) {
+  spdlog::debug("text_input_v1: input_panel_state: {}", state);
+}
+
+void Display::text_input_preedit_string(void* /* data */,
+                                         struct zwp_text_input_v1* /* text_input */,
+                                         uint32_t /* serial */,
+                                         const char* text,
+                                         const char* commit) {
+  spdlog::debug("text_input_v1: preedit_string: {} (commit: {})",
+                text ? text : "(null)", commit ? commit : "(null)");
+}
+
+void Display::text_input_preedit_styling(void* /* data */,
+                                          struct zwp_text_input_v1* /* text_input */,
+                                          uint32_t /* index */,
+                                          uint32_t /* length */,
+                                          uint32_t /* style */) {
+}
+
+void Display::text_input_preedit_cursor(void* /* data */,
+                                         struct zwp_text_input_v1* /* text_input */,
+                                         int32_t /* index */) {
+}
+
+void Display::text_input_commit_string(void* data,
+                                        struct zwp_text_input_v1* /* text_input */,
+                                        uint32_t /* serial */,
+                                        const char* text) {
+  auto* d = static_cast<Display*>(data);
+  if (!text || strlen(text) == 0 || !d->m_view_controller_state) {
+    return;
+  }
+  spdlog::debug("text_input_v1: commit_string: {}", text);
+
+  // Decode UTF-8 to code points and feed each through CharCallback
+  const auto* p = reinterpret_cast<const uint8_t*>(text);
+  const auto* end = p + strlen(text);
+  while (p < end) {
+    uint32_t cp = 0;
+    if ((*p & 0x80u) == 0) {
+      cp = *p++;
+    } else if ((*p & 0xE0u) == 0xC0u) {
+      cp = static_cast<uint32_t>(*p++ & 0x1Fu) << 6u;
+      if (p < end)
+        cp |= static_cast<uint32_t>(*p++ & 0x3Fu);
+    } else if ((*p & 0xF0u) == 0xE0u) {
+      cp = static_cast<uint32_t>(*p++ & 0x0Fu) << 12u;
+      if (p < end)
+        cp |= static_cast<uint32_t>(*p++ & 0x3Fu) << 6u;
+      if (p < end)
+        cp |= static_cast<uint32_t>(*p++ & 0x3Fu);
+    } else if ((*p & 0xF8u) == 0xF0u) {
+      cp = static_cast<uint32_t>(*p++ & 0x07u) << 18u;
+      if (p < end)
+        cp |= static_cast<uint32_t>(*p++ & 0x3Fu) << 12u;
+      if (p < end)
+        cp |= static_cast<uint32_t>(*p++ & 0x3Fu) << 6u;
+      if (p < end)
+        cp |= static_cast<uint32_t>(*p++ & 0x3Fu);
+    } else {
+      p++;  // skip invalid byte
+      continue;
+    }
+    CharCallback(d->m_view_controller_state, cp);
+  }
+}
+
+void Display::text_input_cursor_position(void* /* data */,
+                                          struct zwp_text_input_v1* /* text_input */,
+                                          int32_t /* index */,
+                                          int32_t /* anchor */) {
+}
+
+void Display::text_input_delete_surrounding(void* /* data */,
+                                             struct zwp_text_input_v1* /* text_input */,
+                                             int32_t index,
+                                             uint32_t length) {
+  spdlog::debug("text_input_v1: delete_surrounding: index={}, length={}",
+                index, length);
+}
+
+void Display::text_input_keysym(void* data,
+                                 struct zwp_text_input_v1* /* text_input */,
+                                 uint32_t /* serial */,
+                                 uint32_t /* time */,
+                                 uint32_t sym,
+                                 uint32_t state,
+                                 uint32_t modifiers) {
+  auto* d = static_cast<Display*>(data);
+  spdlog::debug("text_input_v1: keysym: sym={}, state={}, modifiers={}",
+                sym, state, modifiers);
+  if (d->m_view_controller_state) {
+    bool released = (state == 0);
+    KeyCallback(d->m_view_controller_state, released,
+                static_cast<xkb_keysym_t>(sym), 0, modifiers);
+  }
+}
+
+void Display::text_input_language(void* /* data */,
+                                   struct zwp_text_input_v1* /* text_input */,
+                                   uint32_t /* serial */,
+                                   const char* language) {
+  spdlog::debug("text_input_v1: language: {}", language ? language : "(null)");
+}
+
+void Display::text_input_text_direction(void* /* data */,
+                                         struct zwp_text_input_v1* /* text_input */,
+                                         uint32_t /* serial */,
+                                         uint32_t direction) {
+  spdlog::debug("text_input_v1: text_direction: {}", direction);
+}
+
+const struct zwp_text_input_v1_listener Display::text_input_listener = {
+    .enter = text_input_enter,
+    .leave = text_input_leave,
+    .modifiers_map = text_input_modifiers_map,
+    .input_panel_state = text_input_input_panel_state,
+    .preedit_string = text_input_preedit_string,
+    .preedit_styling = text_input_preedit_styling,
+    .preedit_cursor = text_input_preedit_cursor,
+    .commit_string = text_input_commit_string,
+    .cursor_position = text_input_cursor_position,
+    .delete_surrounding_text = text_input_delete_surrounding,
+    .keysym = text_input_keysym,
+    .language = text_input_language,
+    .text_direction = text_input_text_direction,
+};
+
+static uint32_t content_purpose_from_input_type(const std::string& input_type) {
+  if (input_type == "TextInputType.number" ||
+      input_type == "TextInputType.numberWithOptions") {
+    return ZWP_TEXT_INPUT_V1_CONTENT_PURPOSE_NUMBER;
+  } else if (input_type == "TextInputType.phone") {
+    return ZWP_TEXT_INPUT_V1_CONTENT_PURPOSE_PHONE;
+  } else if (input_type == "TextInputType.emailAddress") {
+    return ZWP_TEXT_INPUT_V1_CONTENT_PURPOSE_EMAIL;
+  } else if (input_type == "TextInputType.url") {
+    return ZWP_TEXT_INPUT_V1_CONTENT_PURPOSE_URL;
+  } else if (input_type == "TextInputType.visiblePassword") {
+    return ZWP_TEXT_INPUT_V1_CONTENT_PURPOSE_PASSWORD;
+  } else if (input_type == "TextInputType.name") {
+    return ZWP_TEXT_INPUT_V1_CONTENT_PURPOSE_NAME;
+  }
+  return ZWP_TEXT_INPUT_V1_CONTENT_PURPOSE_NORMAL;
+}
+
+void Display::SetVirtualKeyboardVisible(bool show,
+                                         const std::string& input_type) {
+  m_virtual_keyboard_requested = show;
+  m_current_input_type = input_type;
+  if (show) {
+    ShowVirtualKeyboard();
+  } else {
+    DismissVirtualKeyboard();
+  }
+}
+
+void Display::ShowVirtualKeyboard() {
+  if (!m_text_input) {
+    spdlog::warn(
+        "Cannot show virtual keyboard: zwp_text_input_v1 not available");
+    return;
+  }
+  if (!m_seat || !m_active_surface) {
+    spdlog::warn(
+        "Cannot show virtual keyboard: seat or surface not available");
+    return;
+  }
+  zwp_text_input_v1_activate(m_text_input, m_seat, m_active_surface);
+  zwp_text_input_v1_set_content_type(
+      m_text_input, ZWP_TEXT_INPUT_V1_CONTENT_HINT_NONE,
+      content_purpose_from_input_type(m_current_input_type));
+  zwp_text_input_v1_show_input_panel(m_text_input);
+
+  spdlog::info("Virtual keyboard: show (input_type={})", m_current_input_type);
+}
+
+void Display::DismissVirtualKeyboard() {
+  if (!m_text_input) {
+    return;
+  }
+  zwp_text_input_v1_hide_input_panel(m_text_input);
+  if (m_seat) {
+    zwp_text_input_v1_deactivate(m_text_input, m_seat);
+  }
+  spdlog::info("Virtual keyboard: dismiss");
+}
 
 void Display::display_handle_geometry(void* data,
                                       struct wl_output* /* wl_output */,
@@ -362,38 +594,67 @@ void Display::seat_handle_capabilities(void* data,
                                        uint32_t caps) {
   auto* d = static_cast<Display*>(data);
 
+  spdlog::info("Seat capabilities: pointer={}, keyboard={}, touch={}",
+               (caps & WL_SEAT_CAPABILITY_POINTER) ? "yes" : "no",
+               (caps & WL_SEAT_CAPABILITY_KEYBOARD) ? "yes" : "no",
+               (caps & WL_SEAT_CAPABILITY_TOUCH) ? "yes" : "no");
+
+  // Each wl_seat is a separate input source. A capabilities event from one
+  // seat must not release a handle bound from a different seat (e.g. a VNC
+  // seat advertising touch=no would otherwise unbind a physical touchscreen
+  // bound via the libinput seat).
   if (!d->m_wayland_event_mask.pointer) {
     if ((caps & WL_SEAT_CAPABILITY_POINTER) && !d->m_pointer.wl_pointer) {
-      spdlog::debug("Pointer Present");
+      spdlog::info("Binding wl_pointer");
       d->m_pointer.wl_pointer = wl_seat_get_pointer(seat);
+      d->m_pointer.seat = seat;
       wl_pointer_add_listener(d->m_pointer.wl_pointer, &pointer_listener, d);
     } else if (!(caps & WL_SEAT_CAPABILITY_POINTER) &&
-               d->m_pointer.wl_pointer) {
+               d->m_pointer.wl_pointer && d->m_pointer.seat == seat) {
       wl_pointer_release(d->m_pointer.wl_pointer);
       d->m_pointer.wl_pointer = nullptr;
+      d->m_pointer.seat = nullptr;
     }
   }
 
   if (!d->m_wayland_event_mask.keyboard) {
     if ((caps & WL_SEAT_CAPABILITY_KEYBOARD) && !d->m_keyboard) {
-      spdlog::debug("Keyboard Present");
+      spdlog::info("Binding wl_keyboard");
       d->m_keyboard = wl_seat_get_keyboard(seat);
+      d->m_keyboard_seat = seat;
       wl_keyboard_add_listener(d->m_keyboard, &keyboard_listener, d);
-    } else if (!(caps & WL_SEAT_CAPABILITY_KEYBOARD) && d->m_keyboard) {
+    } else if (!(caps & WL_SEAT_CAPABILITY_KEYBOARD) && d->m_keyboard &&
+               d->m_keyboard_seat == seat) {
       wl_keyboard_release(d->m_keyboard);
       d->m_keyboard = nullptr;
+      d->m_keyboard_seat = nullptr;
     }
   }
 
   if (!d->m_wayland_event_mask.touch) {
     if ((caps & WL_SEAT_CAPABILITY_TOUCH) && !d->m_touch.touch) {
-      spdlog::debug("Touch Present");
+      spdlog::info("Binding wl_touch");
       d->m_touch.touch = wl_seat_get_touch(seat);
+      d->m_touch.seat = seat;
       wl_touch_set_user_data(d->m_touch.touch, d);
       wl_touch_add_listener(d->m_touch.touch, &touch_listener, d);
-    } else if (!(caps & WL_SEAT_CAPABILITY_TOUCH) && d->m_touch.touch) {
+    } else if (!(caps & WL_SEAT_CAPABILITY_TOUCH) && d->m_touch.touch &&
+               d->m_touch.seat == seat) {
       wl_touch_release(d->m_touch.touch);
       d->m_touch.touch = nullptr;
+      d->m_touch.seat = nullptr;
+    }
+  } else {
+    spdlog::warn("Touch events are masked by wayland_event_mask config");
+  }
+
+  // Create text input instance when manager is available
+  if (d->m_text_input_manager && !d->m_text_input) {
+    d->m_text_input = zwp_text_input_manager_v1_create_text_input(
+        d->m_text_input_manager);
+    if (d->m_text_input) {
+      zwp_text_input_v1_add_listener(d->m_text_input, &text_input_listener, d);
+      spdlog::info("zwp_text_input_v1 created");
     }
   }
 }
@@ -715,9 +976,14 @@ void Display::touch_handle_down(void* data,
   d->m_active_surface = surface;
   d->m_touch_engine = d->m_surface_engine_map[surface];
   if (d->m_touch_engine) {
+    spdlog::debug("touch_down: id={}, x={:.1f}, y={:.1f}", id,
+                  wl_fixed_to_double(x_w), wl_fixed_to_double(y_w));
     d->m_touch_engine->CoalesceTouchEvent(FlutterPointerPhase::kDown,
                                           wl_fixed_to_double(x_w),
                                           wl_fixed_to_double(y_w), id);
+  } else {
+    spdlog::warn("touch_down: no engine for surface {:p} (map size={})",
+                 static_cast<void*>(surface), d->m_surface_engine_map.size());
   }
 }
 
