@@ -599,15 +599,21 @@ void Display::seat_handle_capabilities(void* data,
                (caps & WL_SEAT_CAPABILITY_KEYBOARD) ? "yes" : "no",
                (caps & WL_SEAT_CAPABILITY_TOUCH) ? "yes" : "no");
 
+  // Each wl_seat is a separate input source. A capabilities event from one
+  // seat must not release a handle bound from a different seat (e.g. a VNC
+  // seat advertising touch=no would otherwise unbind a physical touchscreen
+  // bound via the libinput seat).
   if (!d->m_wayland_event_mask.pointer) {
     if ((caps & WL_SEAT_CAPABILITY_POINTER) && !d->m_pointer.wl_pointer) {
       spdlog::info("Binding wl_pointer");
       d->m_pointer.wl_pointer = wl_seat_get_pointer(seat);
+      d->m_pointer.seat = seat;
       wl_pointer_add_listener(d->m_pointer.wl_pointer, &pointer_listener, d);
     } else if (!(caps & WL_SEAT_CAPABILITY_POINTER) &&
-               d->m_pointer.wl_pointer) {
+               d->m_pointer.wl_pointer && d->m_pointer.seat == seat) {
       wl_pointer_release(d->m_pointer.wl_pointer);
       d->m_pointer.wl_pointer = nullptr;
+      d->m_pointer.seat = nullptr;
     }
   }
 
@@ -615,10 +621,13 @@ void Display::seat_handle_capabilities(void* data,
     if ((caps & WL_SEAT_CAPABILITY_KEYBOARD) && !d->m_keyboard) {
       spdlog::info("Binding wl_keyboard");
       d->m_keyboard = wl_seat_get_keyboard(seat);
+      d->m_keyboard_seat = seat;
       wl_keyboard_add_listener(d->m_keyboard, &keyboard_listener, d);
-    } else if (!(caps & WL_SEAT_CAPABILITY_KEYBOARD) && d->m_keyboard) {
+    } else if (!(caps & WL_SEAT_CAPABILITY_KEYBOARD) && d->m_keyboard &&
+               d->m_keyboard_seat == seat) {
       wl_keyboard_release(d->m_keyboard);
       d->m_keyboard = nullptr;
+      d->m_keyboard_seat = nullptr;
     }
   }
 
@@ -626,11 +635,14 @@ void Display::seat_handle_capabilities(void* data,
     if ((caps & WL_SEAT_CAPABILITY_TOUCH) && !d->m_touch.touch) {
       spdlog::info("Binding wl_touch");
       d->m_touch.touch = wl_seat_get_touch(seat);
+      d->m_touch.seat = seat;
       wl_touch_set_user_data(d->m_touch.touch, d);
       wl_touch_add_listener(d->m_touch.touch, &touch_listener, d);
-    } else if (!(caps & WL_SEAT_CAPABILITY_TOUCH) && d->m_touch.touch) {
+    } else if (!(caps & WL_SEAT_CAPABILITY_TOUCH) && d->m_touch.touch &&
+               d->m_touch.seat == seat) {
       wl_touch_release(d->m_touch.touch);
       d->m_touch.touch = nullptr;
+      d->m_touch.seat = nullptr;
     }
   } else {
     spdlog::warn("Touch events are masked by wayland_event_mask config");
