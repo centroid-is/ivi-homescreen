@@ -375,6 +375,7 @@ class Display {
 
   struct wl_seat* m_seat{};
   struct wl_keyboard* m_keyboard{};
+  struct wl_seat* m_keyboard_seat{};
 
   struct xdg_wm_base* m_xdg_wm_base{};
 
@@ -503,6 +504,7 @@ class Display {
 
   struct pointer {
     struct wl_pointer* wl_pointer;
+    struct wl_seat* seat;
     struct pointer_event event;
     uint32_t serial;
 
@@ -528,6 +530,7 @@ class Display {
 
   struct touch_ {
     struct wl_touch* touch;
+    struct wl_seat* seat;
     struct touch_event event;
     wl_fixed_t surface_x[kMaxTouchFinger];
     wl_fixed_t surface_y[kMaxTouchFinger];
